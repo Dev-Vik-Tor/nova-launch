@@ -126,6 +126,14 @@ pub fn emit_token_created(
     );
 }
 
+/// Emitted when multiple tokens are created in a single batch.
+pub fn emit_batch_tokens_created(env: &Env, creator: &Address, count: u32) {
+    env.events().publish(
+        (symbol_short!("bch_tkn"),),
+        (creator.clone(), count),
+    );
+}
+
 /// Emit admin transfer event (v1)
 /// 
 /// **Schema Version**: 1
@@ -419,8 +427,6 @@ pub fn emit_stream_metadata_updated(
         (updater, has_metadata),
     );
 }
-
-
 /// Emit metadata set event
 /// 
 /// **Event Name**: meta_set
@@ -571,13 +577,10 @@ pub fn emit_proposal_voted(
     );
 }
 
-pub fn emit_proposal_executed(
-    env: &Env,
-    proposal_id: u64,
-    action_type: crate::types::ActionType,
-) {
+
+pub fn emit_batch_tokens_created(env: &Env, creator: &Address, count: u32) {
     env.events().publish(
-        (symbol_short!("prop_exe"), proposal_id),
-        action_type,
+        (symbol_short!("btch_tkn"),),
+        (creator, count),
     );
 }

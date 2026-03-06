@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use soroban_sdk::{contracterror, contracttype, Address, String, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, Bytes, String, Vec};
 
 /// Factory state containing administrative configuration
 ///
@@ -71,8 +71,8 @@ pub struct ContractMetadata {
 /// ```
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Stream {
-    pub stream_id: String,
+pub struct TokenInfo {
+    pub address: Address,
     pub creator: Address,
     pub name: String,
     pub symbol: String,
@@ -86,6 +86,18 @@ pub struct Stream {
     pub created_at: u64,
     pub is_paused: bool,
     pub clawback_enabled: bool,
+    pub freeze_enabled: bool,
+}
+
+/// Parameters for creating a new token
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenCreationParams {
+    pub name: String,
+    pub symbol: String,
+    pub decimals: u32,
+    pub initial_supply: i128,
+    pub metadata_uri: Option<String>,
 }
 
 /// Compact read-only snapshot of a token's current state.
@@ -100,6 +112,17 @@ pub struct TokenStats {
     pub has_clawback: bool,
     pub clawback_enabled: bool,
     pub freeze_enabled: bool,
+}
+
+/// Parameters for token creation in single/batch flows.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenCreationParams {
+    pub name: String,
+    pub symbol: String,
+    pub decimals: u32,
+    pub initial_supply: i128,
+    pub metadata_uri: Option<String>,
 }
 
 /// Batch fee update structure for Phase 2 optimization
@@ -152,6 +175,12 @@ pub struct FeeUpdate {
 /// * `TreasuryPolicy` - Treasury withdrawal policy
 /// * `WithdrawalPeriod` - Current withdrawal period tracking
 /// * `AllowedRecipient(Address)` - Whether address is allowed recipient
+/// * `StreamCount` - Total number of streams created
+/// * `Stream(u64)` - Stream info by ID
+/// * `NextStreamId` - Next available stream ID
+/// * `VoteSnapshot(u64)` - Vote snapshot by ID
+/// * `VoterWeight(u64, Address)` - Voter weight in snapshot (snapshot_id, voter)
+/// * `NextSnapshotId` - Next available snapshot ID
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
@@ -214,6 +243,15 @@ pub enum DataKey {
 /// * `InvalidMaxSupply` - Max supply is less than initial supply
 /// * `WithdrawalCapExceeded` - Withdrawal would exceed daily cap
 /// * `RecipientNotAllowed` - Recipient not in allowlist
+/// * `ProposalNotFound` - Requested proposal does not exist
+/// * `VotingNotStarted` - Voting period has not begun yet
+/// * `VotingEnded` - Voting period has already ended
+/// * `AlreadyVoted` - Voter has already cast a vote on this proposal
+/// * `VotingClosed` - Voting is no longer accepting votes
+/// * `ProposalExpired` - Proposal has passed its expiration time
+/// * `ProposalNotExecutable` - Proposal cannot be executed in current state
+/// * `QuorumNotMet` - Proposal did not reach minimum quorum threshold
+/// * `AlreadyExecuted` - Proposal has already been executed
 ///
 /// # Examples
 /// ```
@@ -255,19 +293,29 @@ pub enum Error {
     StreamNotFound = 29,
     StreamCancelled = 30,
     NothingToClaim = 31,
+    InvalidTimeWindow = 32,
+    PayloadTooLarge = 33,
+    ProposalNotFound = 34,
+    VotingNotStarted = 35,
+    VotingEnded = 36,
+    AlreadyVoted = 37,
+    VotingClosed = 38,
+    ProposalExpired = 39,
+    ProposalNotExecutable = 40,
+    QuorumNotMet = 41,
+    AlreadyExecuted = 42,
     CliffNotReached = 32,
-    InvalidSchedule = 33,  // Invalid time schedule (cliff outside valid bounds)
-    InvalidTimeWindow = 34,
-    PayloadTooLarge = 35,
-    ProposalNotQueued = 36,
-    ProposalAlreadyExecuted = 37,
-    ProposalCancelled = 38,
-    VotingNotEnded = 39,
-    ProposalNotPassed = 40,
-    ProposalNotFound = 41,
-    VotingNotStarted = 42,
-    VotingEnded = 43,
-    AlreadyVoted = 44,
+    InvalidSchedule = 33,
+    ProposalNotFound = 34,
+    VotingNotStarted = 35,
+    VotingEnded = 36,
+    AlreadyVoted = 37,
+    PayloadTooLarge = 38,
+    InvalidTimeWindow = 39,
+    FreezeNotEnabled = 40,
+    AddressFrozen = 41,
+    AddressNotFrozen = 42,
+    StreamPaused = 43,
 }
 
 /// Type of pending change
@@ -307,6 +355,40 @@ pub enum VoteChoice {
 
 /// Governance proposal
 ///
+/// Proposal lifecycle state
+///
+/// Defines the explicit state machine for proposal lifecycle.
+/// Transitions follow strict rules to prevent invalid state changes.
+///
+/// # State Transitions
+/// ```text
+/// Created -> Active -> Succeeded -> Queued -> Executed (terminal)
+///                   -> Defeated (terminal)
+///                   -> Expired (terminal)
+/// ```
+///
+/// # States
+/// * `Created` - Proposal created, voting not yet started
+/// * `Active` - Voting period is active
+/// * `Succeeded` - Voting ended, proposal passed (quorum met, more for than against)
+/// * `Defeated` - Voting ended, proposal failed (quorum not met or more against)
+/// * `Queued` - Proposal succeeded and queued for execution after timelock
+/// * `Executed` - Proposal has been executed (terminal state)
+/// * `Expired` - Proposal expired before execution (terminal state)
+/// * `Cancelled` - Proposal was cancelled by proposer or admin (terminal state)
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProposalState {
+    Created = 0,
+    Active = 1,
+    Succeeded = 2,
+    Defeated = 3,
+    Queued = 4,
+    Executed = 5,
+    Expired = 6,
+    Cancelled = 7,
+}
+
 /// Represents a proposal for a governance action with voting period.
 ///
 /// # Fields
@@ -321,13 +403,16 @@ pub enum VoteChoice {
 /// * `votes_for` - Number of votes in favor
 /// * `votes_against` - Number of votes against
 /// * `votes_abstain` - Number of abstain votes
+/// * `state` - Current lifecycle state of the proposal
+/// * `executed_at` - Timestamp when proposal was executed (if applicable)
+/// * `cancelled_at` - Timestamp when proposal was cancelled (if applicable)
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Proposal {
     pub id: u64,
     pub proposer: Address,
     pub action_type: ActionType,
-    pub payload: Vec<u8>,
+    pub payload: Bytes,
     pub start_time: u64,
     pub end_time: u64,
     pub eta: u64,
@@ -335,9 +420,9 @@ pub struct Proposal {
     pub votes_for: u32,
     pub votes_against: u32,
     pub votes_abstain: u32,
-    pub queued: bool,
-    pub cancelled: bool,
-    pub executed: bool,
+    pub state: ProposalState,
+    pub executed_at: Option<u64>,
+    pub cancelled_at: Option<u64>,
 }
 
 /// Pending change awaiting timelock expiry
@@ -494,4 +579,3 @@ pub struct TimelockConfig {
     pub delay_seconds: u64,
     pub enabled: bool,
 }
-
