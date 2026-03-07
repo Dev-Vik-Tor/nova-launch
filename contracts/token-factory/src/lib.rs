@@ -908,7 +908,7 @@ impl TokenFactory {
     pub fn get_tokens_by_creator(
         env: Env,
         creator: Address,
-        cursor: Option<types::PaginationCursor>,
+        cursor: types::PaginationCursor,
         limit: Option<u32>,
     ) -> Result<types::PaginatedTokens, Error> {
         pagination::get_tokens_by_creator(&env, &creator, cursor, limit)
@@ -1260,14 +1260,17 @@ impl TokenFactory {
 // mod admin_burn_test;
 
 #[cfg(test)]
+#[cfg(test)]
 mod admin_transfer_test;
 
 // Temporarily disabled - has compilation errors
 // mod event_tests;
 
 #[cfg(test)]
+#[cfg(test)]
 mod error_handling_test;
 
+#[cfg(test)]
 #[cfg(test)]
 mod metadata_test;
 
@@ -1288,34 +1291,46 @@ mod metadata_test;
 // mod burn_property_test;
 
 #[cfg(test)]
+#[cfg(test)]
 mod state_events_test;
 
+#[cfg(test)]
 #[cfg(test)]
 mod fuzz_string_boundaries;
 // Temporarily disabled - has compilation errors
 // #[cfg(test)]
-// mod fuzz_string_boundaries;
+// #[cfg(test)]
+mod fuzz_string_boundaries;
 
 // Temporarily disabled - has compilation errors
 // #[cfg(test)]
 // mod fuzz_numeric_boundaries;
 
 #[cfg(test)]
+#[cfg(test)]
 mod upgrade_test;
 
 #[cfg(test)]
+#[cfg(test)]
 mod fuzz_test;
 
+#[cfg(test)]
 #[cfg(test)]
 mod integration_test;
 
 mod gas_benchmark_comprehensive;
 
 #[cfg(test)]
+#[cfg(test)]
 mod timelock_test;
 
+#[cfg(test)]
 #[cfg(test)]
 mod pagination_integration_test;
 
 #[cfg(test)]
+#[cfg(test)]
 mod treasury_integration_test;
+
+#[cfg(test)]
+mod token_count_test;
