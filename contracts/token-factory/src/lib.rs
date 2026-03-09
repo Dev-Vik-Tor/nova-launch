@@ -18,9 +18,12 @@ mod timelock;
 mod token_creation;
 mod treasury;
 mod types;
-mod validation;
-mod vault;
+mod token_creation;
 mod vesting;
+mod validation;
+
+#[cfg(test)]
+mod governance_property_test;
 
 // #[cfg(test)]
 // mod stream_metadata_update_test;
@@ -1485,46 +1488,91 @@ impl TokenFactory {
         storage::get_vault(&env, vault_id).ok_or(Error::TokenNotFound)
     }
 
-    /// Fund a vault with tokens
+    /// Claim unlocked tokens from an active vault.
+    pub fn claim_vault(env: Env, vault_id: u64, actor: Address) -> Result<i128, Error> {
+        actor.require_auth();
+
+        if storage::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+
+        let mut vault = storage::get_vault(&env, vault_id).ok_or(Error::TokenNotFound)?;
+
+        if actor != vault.owner {
+            return Err(Error::Unauthorized);
+        }
+
+        if vault.status == VaultStatus::Cancelled {
+            return Err(Error::InvalidParameters);
+        }
+
+        if vault.status == VaultStatus::Claimed || vault.claimed_amount >= vault.total_amount {
+            return Err(Error::NothingToClaim);
+        }
+
+        if vault.unlock_time > 0 && env.ledger().timestamp() < vault.unlock_time {
+            return Err(Error::InvalidParameters);
+        }
+
+        let claimable = vault
+            .total_amount
+            .checked_sub(vault.claimed_amount)
+            .ok_or(Error::ArithmeticError)?;
+
+        if claimable <= 0 {
+            return Err(Error::NothingToClaim);
+        }
+
+        vault.claimed_amount = vault
+            .claimed_amount
+            .checked_add(claimable)
+            .ok_or(Error::ArithmeticError)?;
+        vault.status = VaultStatus::Claimed;
+        storage::set_vault(&env, &vault)?;
+
+        events::emit_vault_claimed(&env, vault_id, &actor, claimable);
+        Ok(claimable)
+    }
+
+    /// Cancel an active vault using policy checks.
     ///
-    /// Allows controlled funding of vault balances with strict safety checks.
-    /// The funder must be authorized and the vault must be in an active state.
+    /// Policy:
+    /// - `actor` must authorize.
+    /// - `actor` must be the vault creator or contract admin.
+    /// - Already claimed/cancelled vaults cannot be cancelled.
     ///
-    /// # Arguments
-    /// * `env` - The contract environment
-    /// * `vault_id` - The unique identifier of the vault to fund
-    /// * `funder` - Address providing the funds (must authorize)
-    /// * `amount` - Amount of tokens to add to the vault (must be > 0)
-    ///
-    /// # Returns
-    /// Returns `Ok(())` on success
-    ///
-    /// # Errors
-    /// * `Error::TokenNotFound` - Vault with given ID does not exist
-    /// * `Error::InvalidAmount` - Amount is zero or negative
-    /// * `Error::Unauthorized` - Funder is not authorized
-    /// * `Error::InvalidParameters` - Vault status does not allow funding
-    /// * `Error::ArithmeticError` - Overflow when adding amount to total_amount
-    ///
-    /// # Safety Guarantees
-    /// - Amount validation: Must be positive (> 0)
-    /// - Vault status validation: Only Active vaults can be funded
-    /// - Overflow protection: Uses checked arithmetic for total_amount update
-    /// - Authorization: Funder must explicitly authorize the transaction
-    /// - Atomicity: All checks pass or entire operation fails
-    ///
-    /// # Examples
-    /// ```
-    /// // Fund a vault with 1000 tokens
-    /// factory.fund_vault(&env, vault_id, &funder_address, 1_000_0000000)?;
-    /// ```
-    pub fn fund_vault(
-        env: Env,
-        vault_id: u64,
-        funder: Address,
-        amount: i128,
-    ) -> Result<(), Error> {
-        vault::fund_vault(&env, vault_id, &funder, amount)
+    /// Partially claimed behavior:
+    /// - Cancellation is allowed.
+    /// - `claimed_amount` remains unchanged.
+    /// - Remaining amount is permanently unclaimable.
+    pub fn cancel_vault(env: Env, vault_id: u64, actor: Address) -> Result<(), Error> {
+        actor.require_auth();
+
+        if storage::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+
+        let mut vault = storage::get_vault(&env, vault_id).ok_or(Error::TokenNotFound)?;
+        let admin = storage::get_admin(&env);
+        if actor != vault.creator && actor != admin {
+            return Err(Error::Unauthorized);
+        }
+
+        if vault.status != VaultStatus::Active {
+            return Err(Error::InvalidParameters);
+        }
+
+        let remaining_amount = vault
+            .total_amount
+            .checked_sub(vault.claimed_amount)
+            .ok_or(Error::ArithmeticError)?
+            .max(0);
+
+        vault.status = VaultStatus::Cancelled;
+        storage::set_vault(&env, &vault)?;
+        events::emit_vault_cancelled(&env, vault_id, &actor, remaining_amount);
+
+        Ok(())
     }
 
     /// Update stream metadata (creator/admin only)
@@ -1821,6 +1869,9 @@ mod event_replay_test;
 #[cfg(test)]
 mod batch_token_creation_test;
 
+#[cfg(test)]
+mod vault_cancellation_test;
+
 // Vault/Stream Security and Fuzz Tests
 // Temporarily disabled - requires fixing timelock/freeze dependencies
 // #[cfg(test)]
@@ -1828,3 +1879,4 @@ mod batch_token_creation_test;
 
 // #[cfg(test)]
 // mod vault_fuzz_test;
+
