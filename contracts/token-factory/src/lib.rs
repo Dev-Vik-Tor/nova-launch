@@ -31,6 +31,9 @@ mod buyback_integration_test;
 #[cfg(test)]
 mod buyback_reconciliation_test;
 
+#[cfg(test)]
+mod buyback_finalization_test;
+
 // #[cfg(test)]
 // mod stream_metadata_update_test;
 
