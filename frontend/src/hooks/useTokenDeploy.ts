@@ -7,7 +7,7 @@ import {
     isValidImageFile,
     validateTokenParams,
 } from '../utils/validation';
-import { IPFSService } from '../services/IPFSService';
+import { IPFSService, isValidIpfsUri } from '../services/IPFSService';
 import { StellarService } from '../services/stellar.service';
 import { TransactionHistoryStorage } from '../services/TransactionHistoryStorage';
 import { getDeploymentFeeBreakdown } from '../utils/feeCalculation';
@@ -109,6 +109,9 @@ export function useTokenDeploy(network: 'testnet' | 'mainnet', options: UseToken
                     params.metadata.description,
                     params.name
                 );
+                if (!isValidIpfsUri(metadataUri)) {
+                    throw new Error('IPFS upload returned an invalid URI');
+                }
             } catch (uploadError) {
                 ErrorHandler.handle(uploadError instanceof Error ? uploadError : new Error(getErrorMessage(uploadError)), {
                     action: 'upload-metadata',
