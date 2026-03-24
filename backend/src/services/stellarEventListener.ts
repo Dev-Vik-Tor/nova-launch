@@ -4,6 +4,7 @@ import webhookDeliveryService from "./webhookDeliveryService";
 import { PrismaClient } from "@prisma/client";
 import { GovernanceEventParser } from "./governanceEventParser";
 import governanceEventMapper from "./governanceEventMapper";
+import { campaignEventParser } from "./campaignEventParser";
 
 const HORIZON_URL =
   process.env.STELLAR_HORIZON_URL || "https://horizon-testnet.stellar.org";
@@ -122,6 +123,12 @@ export class StellarEventListener {
         return;
       }
 
+      // Route buyback campaign events
+      if (this.isBuybackEvent(event)) {
+        await this.processBuybackEvent(event);
+        return;
+      }
+
       // Parse event topic to determine event type
       const eventType = this.parseEventType(event);
 
@@ -233,6 +240,63 @@ export class StellarEventListener {
 
       default:
         return baseData;
+    }
+  }
+
+  /**
+   * Check if a Stellar event is a buyback campaign event
+   */
+  private isBuybackEvent(event: StellarEvent): boolean {
+    const buybackTopics = new Set(["bb_created", "bb_executed", "bb_status"]);
+    return event.topic.length > 0 && buybackTopics.has(event.topic[0]);
+  }
+
+  /**
+   * Route and parse a buyback campaign event
+   */
+  private async processBuybackEvent(event: StellarEvent): Promise<void> {
+    const topic = event.topic[0];
+    const v = event.value ?? {};
+
+    try {
+      if (topic === "bb_created") {
+        await campaignEventParser.parseCampaignCreated({
+          campaignId: Number(v.campaign_id ?? event.topic[1]),
+          tokenId: v.token_id ?? event.topic[2] ?? "",
+          creator: v.creator ?? "",
+          type: "BUYBACK",
+          targetAmount: BigInt(v.target_amount ?? 0),
+          startTime: new Date(v.start_time ? Number(v.start_time) * 1000 : Date.now()),
+          endTime: v.end_time ? new Date(Number(v.end_time) * 1000) : undefined,
+          metadata: v.metadata,
+          txHash: event.transaction_hash,
+        });
+        console.log(`Ingested buyback campaign created: ${v.campaign_id}`);
+      } else if (topic === "bb_executed") {
+        await campaignEventParser.parseCampaignExecution({
+          campaignId: Number(v.campaign_id ?? event.topic[1]),
+          executor: v.executor ?? "",
+          amount: BigInt(v.amount ?? 0),
+          recipient: v.recipient,
+          txHash: event.transaction_hash,
+          executedAt: new Date(event.ledger_close_time),
+        });
+        console.log(`Ingested buyback step executed: ${event.transaction_hash}`);
+      } else if (topic === "bb_status") {
+        const status = (v.status ?? "").toUpperCase() as
+          | "ACTIVE"
+          | "PAUSED"
+          | "COMPLETED"
+          | "CANCELLED";
+        await campaignEventParser.parseCampaignStatusChange({
+          campaignId: Number(v.campaign_id ?? event.topic[1]),
+          status,
+          txHash: event.transaction_hash,
+        });
+        console.log(`Ingested buyback status change: ${status}`);
+      }
+    } catch (error) {
+      console.error(`Error processing buyback event (${topic}):`, error);
     }
   }
 
