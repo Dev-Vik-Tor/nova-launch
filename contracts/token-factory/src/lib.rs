@@ -2239,6 +2239,9 @@ mod accounting_property_test;
 #[cfg(test)]
 mod vault_claim_property_test;
 
+#[cfg(test)]
+mod vault_unlock_time_property_test;
+
 #[cfg(all(test, feature = "legacy-tests"))]
 mod vault_cancellation_test;
 
